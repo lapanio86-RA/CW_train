@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 +===========================================================+
-|     CW ADAPTIVE TRAINER  v9  (Streamlit)                   |
+|     CW ADAPTIVE TRAINER  v10  (Streamlit)                  |
 |     Treino de CW por PY2TAE (Lucas)                        |
 |                                                            |
-|  100% no navegador, zero dependência de filesystem          |
-|  Progresso salvo via exportar/importar JSON                |
+|  Página abre zerada. Progresso salvo como "save game" JSON |
+|  Cada aba do navegador é independente                      |
 |                                                            |
 |  Uso: streamlit run cw_trainer_web.py                      |
-|  Dependências: pip install streamlit                        |
+|  Dependência: pip install streamlit                         |
 +===========================================================+
 """
 
@@ -38,7 +38,6 @@ RAMP_MS = 3
 TWO_PI = 2.0 * math.pi
 
 DEFAULT_CONFIG = {
-    "indicativo": "",
     "frequencia": 700, "variacao_freq": 0, "wpm": 10, "farnsworth": 6,
     "licao": 2, "num_grupos": 6, "tam_grupo": 4, "meta_acerto": 90,
     "janela": 10, "peso_minimo": 0.1, "peso_maximo": 1.0,
@@ -133,23 +132,20 @@ def audio_amostra(caracteres, frequencia, wpm):
 
 
 # ===========================================================
-#  CONFIGURAÇÃO (somente session_state, sem filesystem)
+#  CONFIGURAÇÃO (somente session_state)
 # ===========================================================
 
-def c():
-    """Atalho para a configuração do session_state."""
+def cfg():
     return st.session_state.cfg
 
 
 def acuracia_char(ch):
-    """Média móvel de acertos de um caractere."""
-    h = c()["historico_chars"].get(ch, [])
+    h = cfg()["historico_chars"].get(ch, [])
     return sum(h) / len(h) if h else 0.5
 
 
 def atualizar_historico(ch, acertou):
-    """Registra acerto/erro no histórico do caractere."""
-    conf = c()
+    conf = cfg()
     janela = conf["janela"]
     if ch not in conf["historico_chars"]:
         conf["historico_chars"][ch] = []
@@ -159,16 +155,15 @@ def atualizar_historico(ch, acertou):
 
 
 def adicionar_registro(licao, freq, total, corretos, acuracia, aprovado):
-    """Adiciona entrada ao registro de exercícios."""
     entrada = {
         "data": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "licao": licao, "freq": freq,
         "total": total, "corretos": corretos,
         "acuracia": round(acuracia, 1), "aprovado": aprovado,
     }
-    c()["registro"].append(entrada)
-    if len(c()["registro"]) > 500:
-        c()["registro"] = c()["registro"][-500:]
+    cfg()["registro"].append(entrada)
+    if len(cfg()["registro"]) > 500:
+        cfg()["registro"] = cfg()["registro"][-500:]
 
 
 # ===========================================================
@@ -176,128 +171,107 @@ def adicionar_registro(licao, freq, total, corretos, acuracia, aprovado):
 # ===========================================================
 
 def calcular_pesos():
-    """Calcula peso de cada caractere baseado na acurácia."""
-    conf = c()
-    piso = conf["peso_minimo"]
-    teto = conf["peso_maximo"]
+    conf = cfg()
+    piso, teto = conf["peso_minimo"], conf["peso_maximo"]
     chars = CHAR_SEQUENCE[:conf["licao"]]
-    pesos = [piso + (teto - piso) * (1.0 - acuracia_char(ch)) for ch in chars]
-    return chars, pesos
+    return chars, [piso + (teto - piso) * (1.0 - acuracia_char(ch)) for ch in chars]
 
 
 def gerar_grupos():
-    """Gera grupos aleatórios ponderados pela acurácia."""
-    conf = c()
+    conf = cfg()
     chars, pesos = calcular_pesos()
     return [''.join(random.choices(chars, weights=pesos, k=conf["tam_grupo"]))
             for _ in range(conf["num_grupos"])]
 
 
 def frequencia_aleatoria():
-    """Retorna frequência com variação aleatória."""
-    conf = c()
+    conf = cfg()
     v = conf["variacao_freq"]
     return conf["frequencia"] + (random.randint(-v, v) if v else 0)
 
 
 # ===========================================================
-#  COMPARAÇÃO (grupo a grupo)
+#  COMPARAÇÃO
 # ===========================================================
 
 def comparar(enviados, texto_recebido):
-    """Compara grupos enviados com resposta do usuário."""
     recebidos = texto_recebido.upper().split()
     total = corretos = 0
-    detalhes, resultados_chars = [], []
+    detalhes, resultados = [], []
     for i, sg in enumerate(enviados):
         rg = recebidos[i] if i < len(recebidos) else ''
-        acertos_grupo = 0
+        acertos = 0
         for ci in range(len(sg)):
             total += 1
-            acertou = ci < len(rg) and sg[ci] == rg[ci]
-            if acertou:
-                acertos_grupo += 1
-            resultados_chars.append((sg[ci], acertou))
-        corretos += acertos_grupo
-        detalhes.append((sg, rg, acertos_grupo))
-    return total, corretos, (corretos / total * 100 if total else 0), detalhes, resultados_chars
+            ok = ci < len(rg) and sg[ci] == rg[ci]
+            if ok:
+                acertos += 1
+            resultados.append((sg[ci], ok))
+        corretos += acertos
+        detalhes.append((sg, rg, acertos))
+    return total, corretos, (corretos / total * 100 if total else 0), detalhes, resultados
 
 
 # ===========================================================
-#  APLICAÇÃO STREAMLIT
+#  STREAMLIT
 # ===========================================================
 
-def inicializar_estado():
-    """Inicializa variáveis do session_state."""
+def inicializar():
     padrao = {"cfg": None, "grupos": [], "freq": 0,
               "wav": None, "dur": 0, "corrigido": False, "resultado": None}
     for k, v in padrao.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
-
-# ── Tela de login ─────────────────────────────────────────
-
-def tela_login():
-    """Tela inicial: identificação do operador."""
-    st.markdown("## ⚡ CW Adaptive Trainer")
-    st.markdown("#### Treino de CW por PY2TAE (Lucas)")
-    st.divider()
-
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        st.markdown("### 🆕 Entrar")
-        st.caption("Digite seu indicativo ou nome. Se for a primeira vez, um perfil novo será criado.")
-        indicativo = st.text_input("Indicativo / Nome:", placeholder="PY2TAE",
-                                    max_chars=20, key="login_cs").strip().upper()
-        if st.button("▶  Entrar", type="primary", disabled=not indicativo):
-            limpo = "".join(ch for ch in indicativo if ch.isalnum() or ch in "-_")
-            if not limpo:
-                st.error("Indicativo inválido.")
-                return
-            st.session_state.cfg = dict(DEFAULT_CONFIG)
-            st.session_state.cfg["indicativo"] = limpo
-            st.rerun()
-
-    with col2:
-        st.markdown("### 📂 Importar progresso")
-        st.caption("Já treinou antes? Carregue seu arquivo JSON para continuar de onde parou.")
-        arquivo = st.file_uploader("Arquivo JSON:", type=["json"], key="login_upload")
-        if arquivo is not None:
-            try:
-                dados = json.load(arquivo)
-                if "indicativo" not in dados or "historico_chars" not in dados:
-                    st.error("Arquivo inválido. Campos obrigatórios: indicativo, historico_chars.")
-                    return
-                mesclado = dict(DEFAULT_CONFIG)
-                mesclado.update(dados)
-                if not isinstance(mesclado.get("historico_chars"), dict):
-                    mesclado["historico_chars"] = {}
-                if not isinstance(mesclado.get("registro"), list):
-                    mesclado["registro"] = []
-                st.session_state.cfg = mesclado
-                st.success(f"Progresso de **{mesclado['indicativo']}** carregado com sucesso!")
-                st.rerun()
-            except json.JSONDecodeError:
-                st.error("Arquivo JSON inválido.")
+    if st.session_state.cfg is None:
+        st.session_state.cfg = dict(DEFAULT_CONFIG)
 
 
 # ── Barra lateral ─────────────────────────────────────────
 
 def barra_lateral():
-    """Sidebar com informações e configurações."""
-    conf = c()
+    conf = cfg()
     chars_licao = CHAR_SEQUENCE[:conf["licao"]]
 
     st.sidebar.markdown("## ⚡ CW Trainer")
-    st.sidebar.markdown(f"**Operador: {conf['indicativo']}**")
+    st.sidebar.caption("Treino de CW por PY2TAE (Lucas)")
     st.sidebar.divider()
+
+    # Save game: SEMPRE visível e destacado
+    st.sidebar.markdown("### 💾 Seu progresso")
+    dados_json = json.dumps(conf, indent=2, ensure_ascii=False)
+    st.sidebar.download_button(
+        "📥 Baixar save game",
+        data=dados_json,
+        file_name=f"cw_save_{datetime.date.today()}.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    arquivo = st.sidebar.file_uploader("📤 Carregar save game:", type=["json"], key="importar")
+    if arquivo is not None:
+        try:
+            dados = json.load(arquivo)
+            mesclado = dict(DEFAULT_CONFIG)
+            mesclado.update(dados)
+            if not isinstance(mesclado.get("historico_chars"), dict):
+                mesclado["historico_chars"] = {}
+            if not isinstance(mesclado.get("registro"), list):
+                mesclado["registro"] = []
+            st.session_state.cfg = mesclado
+            st.sidebar.success("Progresso carregado!")
+            st.rerun()
+        except json.JSONDecodeError:
+            st.sidebar.error("Arquivo JSON inválido.")
+
+    st.sidebar.caption("⚠️ Baixe seu save game antes de fechar o navegador!")
+
+    st.sidebar.divider()
+
+    # Info da lição
     st.sidebar.markdown(f"**Lição {conf['licao']}/{len(CHAR_SEQUENCE)}**")
     st.sidebar.code(' '.join(chars_licao), language=None)
     if conf["licao"] < len(CHAR_SEQUENCE):
         prox = CHAR_SEQUENCE[conf["licao"]]
-        st.sidebar.markdown(f"Próximo caractere: **{prox}** (`{MORSE_CODE.get(prox, '')}`)")
+        st.sidebar.markdown(f"Próximo: **{prox}** (`{MORSE_CODE.get(prox, '')}`)")
 
     st.sidebar.divider()
 
@@ -319,52 +293,18 @@ def barra_lateral():
                                                conf["peso_maximo"], format="%.1f", key="spc")
         conf["peso_maximo"] = max(conf["peso_maximo"], conf["peso_minimo"] + 0.1)
 
-    # Salvar / Carregar
-    with st.sidebar.expander("💾 Salvar / Carregar progresso"):
-        dados_export = json.dumps(c(), indent=2, ensure_ascii=False)
-        st.download_button(
-            "📥 Baixar meu progresso",
-            data=dados_export,
-            file_name=f"cw_progresso_{conf['indicativo']}.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-        st.caption("⚠️ Salve este arquivo para não perder seu progresso ao fechar o navegador.")
-
-        arquivo = st.file_uploader("📤 Importar progresso:", type=["json"], key="sb_upload")
-        if arquivo is not None:
-            try:
-                dados = json.load(arquivo)
-                mesclado = dict(DEFAULT_CONFIG)
-                mesclado.update(dados)
-                if not isinstance(mesclado.get("historico_chars"), dict):
-                    mesclado["historico_chars"] = {}
-                if not isinstance(mesclado.get("registro"), list):
-                    mesclado["registro"] = []
-                st.session_state.cfg = mesclado
-                st.success(f"Progresso de {mesclado.get('indicativo', '?')} importado!")
-                st.rerun()
-            except json.JSONDecodeError:
-                st.error("Arquivo JSON inválido.")
-
     # Ações
     with st.sidebar.expander("🔧 Ações"):
         if st.button("🗑️ Zerar estatísticas"):
             conf["historico_chars"] = {}
             conf["registro"] = []
             st.rerun()
-        if st.button("↩️ Restaurar configurações padrão"):
-            hist = conf.get("historico_chars", {})
-            reg = conf.get("registro", [])
-            cs = conf.get("indicativo", "")
+        if st.button("↩️ Restaurar tudo para o padrão"):
             st.session_state.cfg = dict(DEFAULT_CONFIG)
-            st.session_state.cfg["indicativo"] = cs
-            st.session_state.cfg["historico_chars"] = hist
-            st.session_state.cfg["registro"] = reg
-            st.rerun()
-        if st.button("🚪 Trocar operador"):
-            for k in ["cfg", "grupos", "wav", "dur", "corrigido", "resultado"]:
-                st.session_state[k] = None if k in ("cfg", "wav", "resultado") else ([] if k == "grupos" else (False if k == "corrigido" else 0))
+            st.session_state.grupos = []
+            st.session_state.wav = None
+            st.session_state.corrigido = False
+            st.session_state.resultado = None
             st.rerun()
 
     st.sidebar.divider()
@@ -372,7 +312,7 @@ def barra_lateral():
     st.sidebar.caption(
         f"{conf['wpm']} WPM · Farns: {conf['farnsworth']} · "
         f"{conf['frequencia']}Hz ±{conf['variacao_freq']}\n\n"
-        f"{conf['num_grupos']}×{conf['tam_grupo']} caracteres · "
+        f"{conf['num_grupos']}×{conf['tam_grupo']} chars · "
         f"Meta: {conf['meta_acerto']}% · Razão: {razao:.0f}×"
     )
 
@@ -380,18 +320,17 @@ def barra_lateral():
 # ── Aba Exercício ─────────────────────────────────────────
 
 def aba_exercicio():
-    """Aba principal de treino."""
-    conf = c()
+    conf = cfg()
 
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col1:
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
         tocar = st.button("▶  Gerar e tocar", type="primary", use_container_width=True)
-    with col2:
-        amostra = st.button("♪  Ouvir amostra", use_container_width=True)
-    with col3:
+    with c2:
+        amostra_btn = st.button("♪  Ouvir amostra", use_container_width=True)
+    with c3:
         corrigir = st.button("✓  Corrigir", type="primary", use_container_width=True)
 
-    # ── GERAR E TOCAR ──
+    # GERAR E TOCAR
     if tocar:
         st.session_state.grupos = gerar_grupos()
         st.session_state.freq = frequencia_aleatoria()
@@ -403,8 +342,8 @@ def aba_exercicio():
             st.session_state.wav = buf.getvalue()
             st.session_state.dur = dur
 
-    # ── AMOSTRA ──
-    if amostra:
+    # AMOSTRA
+    if amostra_btn:
         chars = CHAR_SEQUENCE[:conf["licao"]]
         freq = frequencia_aleatoria()
         with st.spinner("Gerando amostra..."):
@@ -416,14 +355,14 @@ def aba_exercicio():
             colunas[i % len(colunas)].code(f"{ch}  {MORSE_CODE.get(ch, '')}")
         return
 
-    # ── PLAYER ──
+    # PLAYER
     if st.session_state.wav and not st.session_state.corrigido:
         st.divider()
         grupos = st.session_state.grupos
         total_chars = sum(len(g) for g in grupos)
 
         with st.expander(
-            f"ℹ️ Detalhes: {len(grupos)} grupos × {conf['tam_grupo']} = "
+            f"ℹ️ {len(grupos)} grupos × {conf['tam_grupo']} = "
             f"{total_chars} caracteres · {st.session_state.freq} Hz"
         ):
             chars, pesos = calcular_pesos()
@@ -435,12 +374,12 @@ def aba_exercicio():
                 hist = conf["historico_chars"].get(ch, [])
                 media_str = f"{acc * 100:.0f}%" if hist else "sem dados"
                 foco = " 🎯" if p > conf["peso_maximo"] * 0.7 else ""
-                st.text(f"  {ch}   média: {media_str:>10s}   probabilidade: {p / total_p * 100:4.1f}%{foco}")
+                st.text(f"  {ch}   média: {media_str:>10s}   prob: {p / total_p * 100:4.1f}%{foco}")
 
         st.audio(st.session_state.wav, format="audio/wav", autoplay=True)
-        st.caption(f"⏱️ Duração: {st.session_state.dur:.1f}s — Aperte play no reprodutor acima e anote o que ouvir")
+        st.caption(f"⏱️ Duração: {st.session_state.dur:.1f}s — Aperte play e anote o que ouvir")
 
-    # ── CAMPO DE RESPOSTA ──
+    # CAMPO DE RESPOSTA
     if st.session_state.grupos and not st.session_state.corrigido:
         st.markdown("### ✏️ Digite o que você ouviu")
         st.caption("Separe os grupos com espaço")
@@ -453,28 +392,24 @@ def aba_exercicio():
             else:
                 st.warning("Digite o que você ouviu antes de corrigir.")
 
-    # ── RESULTADO ──
+    # RESULTADO
     if st.session_state.resultado:
         exibir_resultado()
 
 
 def executar_correcao(resposta):
-    """Processa a correção do exercício."""
-    conf = c()
+    conf = cfg()
     grupos = st.session_state.grupos
     chars_licao = CHAR_SEQUENCE[:conf["licao"]]
 
     total, corretos, acuracia, detalhes, res_chars = comparar(grupos, resposta)
 
-    # Atualizar histórico de cada caractere
     for ch, acertou in res_chars:
         atualizar_historico(ch, acertou)
 
-    # Verificar aprovação: TODOS os chars devem estar >= meta
     limiar = conf["meta_acerto"] / 100.0
     janela = conf["janela"]
     abaixo, sem_dados = [], []
-
     for ch in chars_licao:
         h = conf["historico_chars"].get(ch, [])
         if len(h) < janela:
@@ -484,14 +419,11 @@ def executar_correcao(resposta):
 
     aprovado = not abaixo and not sem_dados
 
-    # Registrar
     adicionar_registro(conf["licao"], st.session_state.freq, total, corretos, acuracia, aprovado)
 
-    # Avançar lição se aprovado
     if aprovado and conf["licao"] < len(CHAR_SEQUENCE):
         conf["licao"] += 1
 
-    # Salvar resultado na sessão
     st.session_state.resultado = {
         "total": total, "corretos": corretos, "acuracia": acuracia,
         "detalhes": detalhes, "res_chars": res_chars,
@@ -502,13 +434,11 @@ def executar_correcao(resposta):
 
 
 def exibir_resultado():
-    """Mostra o resultado do exercício."""
-    conf = c()
+    conf = cfg()
     r = st.session_state.resultado
 
     st.divider()
 
-    # Métricas principais
     c1, c2, c3 = st.columns(3)
     c1.metric("Acerto", f"{r['acuracia']:.1f}%")
     c2.metric("Corretos", f"{r['corretos']}/{r['total']}")
@@ -534,20 +464,19 @@ def exibir_resultado():
         icone = "✅" if sg == (rg.upper() if rg else '') else "❌"
         st.markdown(f"`{sg}` → {marcado}  {icone} ({gc}/{len(sg)})")
 
-    # Erros detalhados
+    # Erros
     erros = {}
-    for ch, acertou in r["res_chars"]:
-        if not acertou:
+    for ch, ok in r["res_chars"]:
+        if not ok:
             erros[ch] = erros.get(ch, 0) + 1
-
     if erros:
-        st.markdown("#### Caracteres com erro neste exercício")
+        st.markdown("#### Caracteres com erro")
         for ch in sorted(erros, key=erros.get, reverse=True):
             m = MORSE_CODE.get(ch, '')
             acc = acuracia_char(ch)
             st.markdown(f"- **{ch}** (`{m}`) — {erros[ch]}× erro — média atual: {acc * 100:.0f}%")
 
-    # Aprovação / Reprovação
+    # Aprovação
     st.divider()
     if r["aprovado"]:
         st.success(f"✅ Aprovado! Todos os caracteres atingiram a meta de {conf['meta_acerto']}%!")
@@ -578,7 +507,7 @@ def exibir_resultado():
                     f"{n}/{conf['janela']} tentativas"
                 )
 
-    # Botão de novo exercício
+    st.markdown("")
     if st.button("🔄 Novo exercício", type="primary"):
         st.session_state.grupos = []
         st.session_state.wav = None
@@ -590,22 +519,19 @@ def exibir_resultado():
 # ── Aba Estatísticas ──────────────────────────────────────
 
 def aba_estatisticas():
-    """Tabela de desempenho por caractere."""
-    conf = c()
+    conf = cfg()
     chars_licao = CHAR_SEQUENCE[:conf["licao"]]
     janela = conf["janela"]
     limiar = conf["meta_acerto"] / 100.0
     _, pesos = calcular_pesos()
     mapa_pesos = dict(zip(chars_licao, pesos))
 
-    # Barra de progresso geral
     prontos = sum(1 for ch in chars_licao
                   if len(conf["historico_chars"].get(ch, [])) >= janela
                   and acuracia_char(ch) >= limiar)
     st.progress(prontos / len(chars_licao) if chars_licao else 0)
     st.caption(f"Progresso: {prontos}/{len(chars_licao)} caracteres aprovados (≥ {conf['meta_acerto']}%)")
 
-    # Tabela
     dados = []
     for ch in chars_licao:
         h = conf["historico_chars"].get(ch, [])
@@ -626,15 +552,14 @@ def aba_estatisticas():
     st.dataframe(dados, use_container_width=True, hide_index=True,
                  height=min(35 * len(dados) + 38, 600))
 
-    # Resumo
     com_dados = [ch for ch in chars_licao if conf["historico_chars"].get(ch)]
     if com_dados:
         acuracias = [acuracia_char(ch) for ch in com_dados]
-        media_geral = sum(acuracias) / len(acuracias) * 100
+        media = sum(acuracias) / len(acuracias) * 100
         pior = min(com_dados, key=lambda ch: acuracia_char(ch))
         melhor = max(com_dados, key=lambda ch: acuracia_char(ch))
         c1, c2, c3 = st.columns(3)
-        c1.metric("Média geral", f"{media_geral:.1f}%")
+        c1.metric("Média geral", f"{media:.1f}%")
         c2.metric(f"Melhor: {melhor}", f"{acuracia_char(melhor) * 100:.1f}%")
         c3.metric(f"Pior: {pior}", f"{acuracia_char(pior) * 100:.1f}%")
 
@@ -642,8 +567,7 @@ def aba_estatisticas():
 # ── Aba Histórico ─────────────────────────────────────────
 
 def aba_historico():
-    """Registro de exercícios realizados."""
-    conf = c()
+    conf = cfg()
     registro = conf.get("registro", [])
 
     if not registro:
@@ -652,22 +576,20 @@ def aba_historico():
 
     st.markdown(f"### Histórico de treinos ({len(registro)} exercícios)")
 
-    # Estatísticas gerais
     total_ex = len(registro)
     aprovados = sum(1 for r in registro if r.get("aprovado"))
     taxa = aprovados / total_ex * 100 if total_ex else 0
+    media_acc = sum(r.get("acuracia", 0) for r in registro) / total_ex if total_ex else 0
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Total de exercícios", total_ex)
     c2.metric("Aprovações", f"{aprovados} ({taxa:.0f}%)")
-    media_acc = sum(r.get("acuracia", 0) for r in registro) / total_ex if total_ex else 0
     c3.metric("Acurácia média", f"{media_acc:.1f}%")
 
-    # Tabela dos últimos exercícios (mais recente primeiro)
     ultimos = list(reversed(registro[-50:]))
-    dados_tabela = []
+    tabela = []
     for r in ultimos:
-        dados_tabela.append({
+        tabela.append({
             "Data": r.get("data", "—"),
             "Lição": r.get("licao", "—"),
             "Acerto": f"{r.get('acuracia', 0):.1f}%",
@@ -675,16 +597,16 @@ def aba_historico():
             "Freq": f"{r.get('freq', 0)} Hz",
             "Resultado": "✅ Aprovado" if r.get("aprovado") else "❌ Repetir",
         })
-    st.dataframe(dados_tabela, use_container_width=True, hide_index=True)
+    st.dataframe(tabela, use_container_width=True, hide_index=True)
 
 
 # ── Aba Referência Morse ──────────────────────────────────
 
 def aba_referencia():
-    """Tabela de referência dos caracteres morse."""
-    conf = c()
+    conf = cfg()
     chars = CHAR_SEQUENCE[:conf["licao"]]
-    st.markdown("### Tabela Morse — Caracteres da lição atual")
+
+    st.markdown("### Caracteres da lição atual")
     colunas = st.columns(min(len(chars), 6))
     for i, ch in enumerate(chars):
         m = MORSE_CODE.get(ch, '')
@@ -724,14 +646,7 @@ def main():
     }
     </style>""", unsafe_allow_html=True)
 
-    inicializar_estado()
-
-    # Se não logou ainda, mostra tela de login
-    if st.session_state.cfg is None:
-        tela_login()
-        return
-
-    # Interface principal
+    inicializar()
     barra_lateral()
 
     t1, t2, t3, t4 = st.tabs([
