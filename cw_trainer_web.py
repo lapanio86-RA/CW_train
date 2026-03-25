@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-+===========================================================+
-|     CW ADAPTIVE TRAINER  v10  (Streamlit)                  |
-|     Treino de CW por PY2TAE (Lucas)                        |
-|                                                            |
-|  Página abre zerada. Progresso salvo como "save game" JSON |
-|  Cada aba do navegador é independente                      |
-|                                                            |
-|  Uso: streamlit run cw_trainer_web.py                      |
-|  Dependência: pip install streamlit                         |
-+===========================================================+
-"""
-
 import json, math, wave, array, random, io, datetime
 import streamlit as st
 
@@ -240,13 +227,13 @@ def barra_lateral():
     st.sidebar.markdown("### 💾 Seu progresso")
     dados_json = json.dumps(conf, indent=2, ensure_ascii=False)
     st.sidebar.download_button(
-        "📥 Baixar save game",
+        "📥 Baixar progresso",
         data=dados_json,
         file_name=f"cw_save_{datetime.date.today()}.json",
         mime="application/json",
         use_container_width=True,
     )
-    arquivo = st.sidebar.file_uploader("📤 Carregar save game:", type=["json"], key="importar")
+    arquivo = st.sidebar.file_uploader("📤 Carregar progresso:", type=["json"], key="importar")
     if arquivo is not None:
         try:
             dados = json.load(arquivo)
@@ -262,7 +249,7 @@ def barra_lateral():
         except json.JSONDecodeError:
             st.sidebar.error("Arquivo JSON inválido.")
 
-    st.sidebar.caption("⚠️ Baixe seu save game antes de fechar o navegador!")
+    st.sidebar.caption("⚠️ Baixe progresso antes de fechar o navegador!")
 
     st.sidebar.divider()
 
