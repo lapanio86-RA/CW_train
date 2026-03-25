@@ -251,29 +251,80 @@ def init_excel():
     wb.save(EXCEL_FILE)
 
 def log_excel(cfg, lc, freq, total, correct, acc, passed):
-    init_excel()
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb.active
+    """Registra tentativa no disco (local) e no session_state (cloud)."""
     now = datetime.datetime.now()
     res = "APROVADO" if passed else "REPETIR"
-    tb = Border(left=Side(style='thin'),right=Side(style='thin'),
-                top=Side(style='thin'),bottom=Side(style='thin'))
     row = [now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), cfg["lesson"],
            ' '.join(lc), cfg["wpm"], cfg["farnsworth"], freq,
            cfg["num_groups"], cfg["group_size"], total, correct, round(acc,1), res]
-    ws.append(row)
-    rn = ws.max_row
-    for col in range(1, len(row)+1):
-        c = ws.cell(row=rn, column=col)
-        c.border, c.alignment = tb, Alignment(horizontal='center')
-    rc = ws.cell(row=rn, column=len(row))
-    if res == "APROVADO":
-        rc.fill = PatternFill(start_color="C6EFCE",end_color="C6EFCE",fill_type="solid")
-        rc.font = Font(color="006100", bold=True)
-    else:
-        rc.fill = PatternFill(start_color="FFC7CE",end_color="FFC7CE",fill_type="solid")
-        rc.font = Font(color="9C0006", bold=True)
-    wb.save(EXCEL_FILE)
+
+    # Salvar em session_state (sempre funciona, cloud ou local)
+    if "telemetry" not in st.session_state:
+        st.session_state.telemetry = []
+    st.session_state.telemetry.append(row)
+
+    # Tentar salvar no disco também (funciona local, pode falhar no cloud)
+    try:
+        init_excel()
+        wb = load_workbook(EXCEL_FILE)
+        ws = wb.active
+        tb = Border(left=Side(style='thin'),right=Side(style='thin'),
+                    top=Side(style='thin'),bottom=Side(style='thin'))
+        ws.append(row)
+        rn = ws.max_row
+        for col in range(1, len(row)+1):
+            c = ws.cell(row=rn, column=col)
+            c.border, c.alignment = tb, Alignment(horizontal='center')
+        rc = ws.cell(row=rn, column=len(row))
+        if res == "APROVADO":
+            rc.fill = PatternFill(start_color="C6EFCE",end_color="C6EFCE",fill_type="solid")
+            rc.font = Font(color="006100", bold=True)
+        else:
+            rc.fill = PatternFill(start_color="FFC7CE",end_color="FFC7CE",fill_type="solid")
+            rc.font = Font(color="9C0006", bold=True)
+        wb.save(EXCEL_FILE)
+    except Exception:
+        pass  # No cloud, pode falhar — telemetria fica no session_state
+
+
+def _build_telemetry_excel():
+    """Gera Excel da telemetria em memória para download."""
+    rows = st.session_state.get("telemetry", [])
+    if not rows:
+        return None
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Telemetria CW"
+    headers = ["Data","Hora","Licao","Caracteres","WPM","Farnsworth",
+               "Freq (Hz)","Grupos","Chars/Grp","Total","Corretos","Acerto (%)","Resultado"]
+    hf = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
+    hfn = Font(bold=True, color="FFFFFF", size=11)
+    tb = Border(left=Side(style='thin'),right=Side(style='thin'),
+                top=Side(style='thin'),bottom=Side(style='thin'))
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.fill, c.font, c.alignment, c.border = hf, hfn, Alignment(horizontal='center'), tb
+
+    for row in rows:
+        ws.append(row)
+        rn = ws.max_row
+        for col in range(1, len(row)+1):
+            c = ws.cell(row=rn, column=col)
+            c.border, c.alignment = tb, Alignment(horizontal='center')
+        rc = ws.cell(row=rn, column=len(row))
+        res = row[-1]
+        if res == "APROVADO":
+            rc.fill = PatternFill(start_color="C6EFCE",end_color="C6EFCE",fill_type="solid")
+            rc.font = Font(color="006100", bold=True)
+        else:
+            rc.fill = PatternFill(start_color="FFC7CE",end_color="FFC7CE",fill_type="solid")
+            rc.font = Font(color="9C0006", bold=True)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 # ===========================================================
@@ -282,10 +333,12 @@ def log_excel(cfg, lc, freq, total, correct, acc, passed):
 
 def init_state():
     for k, v in {"cfg": None, "groups": [], "freq": 0, "wav": None,
-                 "dur": 0, "checked": False, "result": None}.items():
+                 "dur": 0, "checked": False, "result": None,
+                 "telemetry": []}.items():
         if k not in st.session_state:
             st.session_state[k] = v
     if st.session_state.cfg is None:
+        # Tenta carregar do disco (uso local), senao usa defaults
         st.session_state.cfg = load_config()
         init_excel()
 
@@ -333,6 +386,53 @@ def sidebar():
             st.session_state.cfg["char_history"] = h
             save_config(st.session_state.cfg)
             st.rerun()
+
+    with st.sidebar.expander("💾 Progresso (salvar/carregar)"):
+        st.caption("Seu progresso fica na sessao do navegador. "
+                   "Baixe o arquivo para nao perder!")
+
+        # ── Download do progresso ──
+        progress_data = json.dumps(cfg, indent=2, ensure_ascii=False)
+        st.download_button(
+            label="⬇️ Baixar meu progresso",
+            data=progress_data,
+            file_name="cw_progresso.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+        # ── Upload do progresso ──
+        uploaded = st.file_uploader("⬆️ Carregar progresso", type=["json"],
+                                     label_visibility="collapsed")
+        if uploaded is not None:
+            try:
+                loaded = json.loads(uploaded.getvalue().decode("utf-8"))
+                # Validar que tem os campos essenciais
+                if "lesson" in loaded and "char_history" in loaded:
+                    # Mesclar com defaults para garantir campos novos
+                    merged = dict(DEFAULT_CONFIG)
+                    merged.update(loaded)
+                    st.session_state.cfg = merged
+                    save_config(merged)
+                    st.success(f"Progresso carregado! Licao {merged['lesson']}, "
+                              f"{len(merged.get('char_history', {}))} chars com dados.")
+                    st.rerun()
+                else:
+                    st.error("Arquivo invalido. Use o JSON baixado pelo botao acima.")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                st.error("Arquivo corrompido ou formato invalido.")
+
+        # ── Download da telemetria Excel ──
+        if st.session_state.telemetry:
+            tel_wb = _build_telemetry_excel()
+            if tel_wb:
+                st.download_button(
+                    label="📊 Baixar telemetria (.xlsx)",
+                    data=tel_wb,
+                    file_name="cw_telemetria.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
     st.sidebar.divider()
     r = cfg["weight_ceiling"] / cfg["weight_floor"] if cfg["weight_floor"] > 0 else 999
